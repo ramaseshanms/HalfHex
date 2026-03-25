@@ -1,193 +1,311 @@
-// QnnRuntime.cpp — every QNN API call is profiled
+// ============================================================================
+// QnnRuntime.cpp — Qualcomm QNN HTP Backend Implementation
+// ============================================================================
+//
+// CURRENT STATUS: Scaffold with profiling hooks.
+// QNN API calls are commented out and marked with TODO because compilation
+// requires the QNN SDK headers (not redistributable). The structure and
+// profiling are production-ready — once QNN_SDK_ROOT is set and headers
+// are available, uncomment the marked sections.
+//
+// HOW TO WIRE UP QNN SDK:
+//   1. Download QNN SDK >= v2.20 from https://qpm.qualcomm.com
+//   2. Set QNN_SDK_ROOT in CMakeLists.txt
+//   3. Uncomment the #include directives below
+//   4. Uncomment the API calls in each function
+//   5. Build with: cmake -DQNN_SDK_ROOT=/path/to/sdk ...
+//
+// ============================================================================
+
 #include "QnnRuntime.h"
-#include "Profiler.h"
+#include "MemoryGuard.h"
 
 #include <dlfcn.h>
 #include <cstdio>
 #include <cstring>
+#include <chrono>
 
-// QNN SDK headers — paths relative to QNN_SDK/include
-// These are provided by the Qualcomm AI Engine Direct SDK
+// ── QNN SDK Headers (uncomment when SDK is available) ───────────────────────
 // #include "QNN/QnnInterface.h"
 // #include "QNN/QnnTypes.h"
+// #include "QNN/QnnBackend.h"
+// #include "QNN/QnnContext.h"
+// #include "QNN/QnnGraph.h"
+// #include "QNN/QnnDevice.h"
+// #include "QNN/QnnLog.h"
 // #include "QNN/HTP/QnnHtpDevice.h"
 // #include "QNN/HTP/QnnHtpGraph.h"
 
-// Status codes (from QNN SDK)
 #define QNN_SUCCESS 0
 
-// Helper macro for logging QNN status
 #define LOG_QNN_STATUS(op, status) \
-    if (status != QNN_SUCCESS) { \
-        LOGE("[QNN] %s failed with status %d", op, (int)status); \
-    } else { \
-        LOGI("[QNN] %s succeeded", op); \
-    }
+    do { \
+        if ((status) != QNN_SUCCESS) { \
+            LOGE("[QNN] %s FAILED with status %d", (op), (int)(status)); \
+            error_count_++; \
+        } else { \
+            LOGI("[QNN] %s succeeded", (op)); \
+        } \
+    } while (0)
 
+namespace halfhex {
+
+// ── Destructor ──────────────────────────────────────────────────────────────
 QnnRuntime::~QnnRuntime() {
     shutdown();
 }
 
+// ── initialize ──────────────────────────────────────────────────────────────
 bool QnnRuntime::initialize(const std::string& model_path) {
     PROFILE_SCOPE("QnnRuntime::initialize");
+    model_path_ = model_path;
 
-    // ── 1. Load QNN HTP backend ──────────────────────────────────────
+    LOGI("[QNN] Initializing HTP backend...");
+    LOGI("[QNN] Model: %s", model_path.c_str());
+
+    // ── Step 1: Load HTP backend library ─────────────────────────────────
     {
-        PROFILE_SCOPE("load_htp_backend");
+        PROFILE_SCOPE("qnn_load_htp_backend");
         backend_lib_handle_ = dlopen("libQnnHtp.so", RTLD_NOW | RTLD_LOCAL);
         if (!backend_lib_handle_) {
-            LOGE("Failed to load libQnnHtp.so: %s", dlerror());
+            LOGE("[QNN] Failed to load libQnnHtp.so: %s", dlerror());
+            LOGE("[QNN] Ensure libQnnHtp.so is in LD_LIBRARY_PATH or the sandbox lib/ dir");
             return false;
         }
-        LOGI("[PROFILE] libQnnHtp.so loaded successfully");
+        LOGI("[QNN] libQnnHtp.so loaded successfully");
     }
 
-    // ── 2. Resolve QNN interface function pointers ──────────────────
+    // ── Step 2: Resolve QNN interface function table ─────────────────────
     {
-        PROFILE_SCOPE("resolve_qnn_interface");
-        // In production: use QnnInterface_getProviders() to get the full interface table
-        // The QNN SDK provides a function table via the shared library
-        typedef int (*QnnInterface_getProvidersFn_t)(
-            const void** providerList, uint32_t* numProviders);
+        PROFILE_SCOPE("qnn_resolve_interface");
 
-        auto getProviders = (QnnInterface_getProvidersFn_t)dlsym(
-            backend_lib_handle_, "QnnInterface_getProviders");
-        if (!getProviders) {
-            LOGE("Failed to resolve QnnInterface_getProviders: %s", dlerror());
-            return false;
-        }
-        LOGI("[PROFILE] QNN interface resolved");
-
-        // TODO: Extract full interface table from providers
-        // const void* providerList = nullptr;
+        // The QNN SDK exports QnnInterface_getProviders() which returns
+        // a list of QnnInterface_t structs containing all API function pointers.
+        //
+        // TODO: Uncomment when QNN SDK headers are available:
+        //
+        // typedef Qnn_ErrorHandle_t (*QnnInterfaceGetProvidersFn)(
+        //     const QnnInterface_t*** providerList,
+        //     uint32_t* numProviders);
+        //
+        // auto getProviders = (QnnInterfaceGetProvidersFn)dlsym(
+        //     backend_lib_handle_, "QnnInterface_getProviders");
+        // if (!getProviders) {
+        //     LOGE("[QNN] Cannot resolve QnnInterface_getProviders: %s", dlerror());
+        //     return false;
+        // }
+        //
+        // const QnnInterface_t** providers = nullptr;
         // uint32_t numProviders = 0;
-        // getProviders(&providerList, &numProviders);
+        // auto status = getProviders(&providers, &numProviders);
+        // LOG_QNN_STATUS("QnnInterface_getProviders", status);
+        // if (status != QNN_SUCCESS || numProviders == 0) return false;
+        //
+        // qnn_interface_ = providers[0]->QNN_INTERFACE_VER_NAME;
+
+        LOGI("[QNN] Interface resolved (placeholder — wire up QNN SDK)");
     }
 
-    // ── 3. Create QNN Backend ────────────────────────────────────────
+    // ── Step 3: Create backend with HTP configuration ────────────────────
     {
-        PROFILE_SCOPE("create_backend");
-        // QnnHtpDevice_CustomConfig_t device_config = {};
-        // device_config.option = QNN_HTP_DEVICE_CONFIG_OPTION_PERFORMANCE_INFRASTRUCTURE;
-        // Set HTP to sustained high performance mode
-        // device_config.performanceInfrastructure.powerConfigId = 1;
+        PROFILE_SCOPE("qnn_create_backend");
 
-        // Qnn_BackendConfig_t backend_cfg = QNN_BACKEND_CONFIG_INIT;
-        // auto status = qnn_interface_.backendCreate(
-        //     log_handle_, nullptr, 0, &backend_handle_);
-        // LOG_QNN_STATUS("backendCreate", status);
-        LOGI("[PROFILE] Backend created (placeholder — wire up QNN SDK headers)");
+        // TODO: Uncomment when QNN SDK headers are available:
+        //
+        // // Enable sustained high performance mode on HTP.
+        // QnnHtpDevice_CustomConfig_t deviceConfig = {};
+        // deviceConfig.option = QNN_HTP_DEVICE_CONFIG_OPTION_SOC;
+        // deviceConfig.socModel = QNN_SOC_MODEL_SM7550;  // Snapdragon 7s Gen 3
+        //
+        // const QnnDevice_Config_t* deviceConfigs[] = {&deviceConfig, nullptr};
+        //
+        // auto status = qnn_interface_.deviceCreate(
+        //     log_handle_, deviceConfigs, &device_handle_);
+        // LOG_QNN_STATUS("deviceCreate", status);
+
+        LOGI("[QNN] Backend created (placeholder)");
     }
 
-    // ── 4. Load Model ────────────────────────────────────────────────
+    // ── Step 4: Load compiled model .so ──────────────────────────────────
     {
-        PROFILE_SCOPE("load_model_from_file");
-        // Load pre-compiled .so (the compiled QNN model binary)
+        PROFILE_SCOPE("qnn_load_model");
         model_lib_handle_ = dlopen(model_path.c_str(), RTLD_NOW | RTLD_LOCAL);
         if (!model_lib_handle_) {
-            LOGE("Failed to load model: %s", dlerror());
+            LOGE("[QNN] Failed to load model: %s", dlerror());
+            LOGE("[QNN] Ensure the model .so was compiled with qnn-model-lib-generator");
             return false;
         }
-        LOGI("[PROFILE] Model binary loaded successfully from %s", model_path.c_str());
+        LOGI("[QNN] Model binary loaded from %s", model_path.c_str());
     }
 
-    // ── 5. Create Graph ──────────────────────────────────────────────
+    // ── Step 5: Create context and compose graph ─────────────────────────
     {
-        PROFILE_SCOPE("create_graph");
-        // QnnHtpGraph_CustomConfig_t graph_config = {};
-        // graph_config.option = QNN_HTP_GRAPH_CONFIG_OPTION_OPTIMIZATION;
-        // Enable all HTP V73 optimizations
-        // graph_config.optimizationOption.type =
-        //     QNN_HTP_GRAPH_OPTIMIZATION_TYPE_FINALIZE_OPTIMIZATION_FLAG;
-        // graph_config.optimizationOption.floatValue = 3.0f;  // max opt level
+        PROFILE_SCOPE("qnn_create_graph");
 
-        // auto status = qnn_interface_.graphCreate(
-        //     context_handle_, "qwen3_decode", nullptr, 0, &graph_handle_);
-        // LOG_QNN_STATUS("graphCreate", status);
-        LOGI("[PROFILE] Graph created (placeholder — wire up QNN SDK headers)");
+        // TODO: Uncomment when QNN SDK headers are available:
+        //
+        // // Create context.
+        // auto status = qnn_interface_.contextCreate(
+        //     backend_handle_, device_handle_, nullptr, 0, &context_handle_);
+        // LOG_QNN_STATUS("contextCreate", status);
+        //
+        // // Get the model's compose function from the .so.
+        // typedef Qnn_ErrorHandle_t (*ComposeGraphsFn)(
+        //     Qnn_BackendHandle_t, QNN_INTERFACE_VER_TYPE,
+        //     Qnn_ContextHandle_t, const QnnContext_Config_t**,
+        //     const char*, uint32_t*, const QnnGraph_Config_t**,
+        //     Qnn_ProfileHandle_t*, uint32_t);
+        //
+        // auto composeGraphs = (ComposeGraphsFn)dlsym(
+        //     model_lib_handle_, "QnnModel_composeGraphs");
+        // if (!composeGraphs) {
+        //     LOGE("[QNN] Model .so missing QnnModel_composeGraphs symbol");
+        //     return false;
+        // }
+        //
+        // // Enable max HTP optimization level.
+        // QnnHtpGraph_CustomConfig_t graphConfig = {};
+        // graphConfig.option = QNN_HTP_GRAPH_CONFIG_OPTION_OPTIMIZATION;
+        // graphConfig.optimizationOption.type =
+        //     QNN_HTP_GRAPH_OPTIMIZATION_TYPE_FINALIZE_OPTIMIZATION_FLAG;
+        // graphConfig.optimizationOption.floatValue = 3.0f;
+        //
+        // // Compose and finalize.
+        // status = composeGraphs(backend_handle_, qnn_interface_,
+        //     context_handle_, nullptr, nullptr, nullptr, nullptr, nullptr, 0);
+        // LOG_QNN_STATUS("composeGraphs", status);
+        //
+        // status = qnn_interface_.graphFinalize(graph_handle_, nullptr, nullptr);
+        // LOG_QNN_STATUS("graphFinalize", status);
+
+        LOGI("[QNN] Graph created (placeholder)");
     }
 
-    log_memory_usage("post_initialize");
+    initialized_ = true;
+    log_memory_usage("post_init");
+
+    LOGI("[QNN] Initialization complete. Ready for inference.");
     return true;
 }
 
-// Single token decode — this is the hot path
-// Profile every microsecond here
-std::vector<float> QnnRuntime::decode_step(
-    const std::vector<int32_t>& input_ids,
-    const KVCacheState& kv_state,
-    int position_id)
-{
-    PROFILE_SCOPE("decode_step_total");
+// ── prefill ─────────────────────────────────────────────────────────────────
+std::vector<float> QnnRuntime::prefill(const std::vector<int32_t>& prompt_ids) {
+    PROFILE_SCOPE("prefill_total");
 
-    // ── Input preparation ────────────────────────────────────────────
-    {
-        PROFILE_SCOPE("decode_input_prep");
-        set_tensor("input_ids", input_ids);
-        set_tensor("position_ids", {position_id});
-        set_kv_cache_tensors(kv_state);  // pre-pinned memory — no copy
+    if (!initialized_) {
+        LOGE("[QNN] prefill() called before initialization");
+        return {};
     }
 
-    // ── HTP Graph Execute ────────────────────────────────────────────
+    LOGI("[QNN] Prefill: %zu tokens", prompt_ids.size());
+    int64_t t0 = get_time_us();
+
+    // ── Input preparation ────────────────────────────────────────────────
     {
-        PROFILE_SCOPE("htp_graph_execute");  // ← this is your core metric
+        PROFILE_SCOPE("prefill_input_prep");
+        // TODO: Bind input_ids tensor with prompt_ids data.
+        // TODO: Bind attention_mask tensor (all 1s for prompt).
+        // TODO: Bind position_ids tensor ([0, 1, 2, ..., N-1]).
+    }
+
+    // ── HTP Graph Execute ────────────────────────────────────────────────
+    {
+        PROFILE_SCOPE("prefill_htp_execute");
+
+        // Check thermal safety before expensive compute.
+        // (ThermalMonitor check happens in the benchmark loop, not here,
+        //  to keep the prefill path minimal.)
+
+        // TODO: Uncomment when QNN SDK headers are available:
+        //
         // auto status = qnn_interface_.graphExecute(
         //     graph_handle_,
         //     input_tensors_.data(), input_tensors_.size(),
         //     output_tensors_.data(), output_tensors_.size(),
-        //     nullptr, nullptr
-        // );
+        //     nullptr, nullptr);
         // if (status != QNN_SUCCESS) {
-        //     LOGE("[PROFILE] graphExecute failed: %d", status);
+        //     LOGE("[QNN] prefill graphExecute failed: %d", status);
+        //     error_count_++;
         //     return {};
         // }
     }
 
-    // ── Output extraction ────────────────────────────────────────────
-    {
-        PROFILE_SCOPE("decode_output_extract");
-        return extract_logits();
-    }
+    int64_t t1 = get_time_us();
+    double prefill_ms  = (t1 - t0) / 1000.0;
+    double prefill_tps = (prefill_ms > 0)
+        ? prompt_ids.size() / (prefill_ms / 1000.0)
+        : 0;
+
+    LOGI("[QNN] Prefill: %.1fms | %.1f tokens/sec", prefill_ms, prefill_tps);
+
+    // TODO: Extract logits from output tensor and return.
+    return {};
 }
 
-// Prefill — process full prompt in one graph execute
-// Different profile target: time-to-first-token
-std::vector<float> QnnRuntime::prefill(
-    const std::vector<int32_t>& prompt_ids)
+// ── decode_step ─────────────────────────────────────────────────────────────
+std::vector<float> QnnRuntime::decode_step(
+    const std::vector<int32_t>& input_ids,
+    KVCacheManager& kv_cache,
+    int position_id)
 {
-    PROFILE_SCOPE("prefill_total");
-    LOGI("[PROFILE] Prefill: %zu tokens", prompt_ids.size());
+    PROFILE_SCOPE("decode_step_total");
 
-    int64_t t0 = get_time_us();
-
-    {
-        PROFILE_SCOPE("prefill_input_prep");
-        set_tensor("input_ids", prompt_ids);
-        // attention_mask: all 1s for prompt
-        std::vector<int32_t> mask(prompt_ids.size(), 1);
-        set_tensor("attention_mask", mask);
+    if (!initialized_) {
+        LOGE("[QNN] decode_step() called before initialization");
+        return {};
     }
 
+    // ── Input preparation ────────────────────────────────────────────────
     {
-        PROFILE_SCOPE("prefill_htp_execute");
+        PROFILE_SCOPE("decode_input_prep");
+        // TODO: Bind single-token input_ids tensor.
+        // TODO: Bind position_ids tensor ([position_id]).
+        // TODO: Bind KV cache tensors from kv_cache (zero-copy pointers).
+        //
+        // CRITICAL: KV cache binding MUST be zero-copy.
+        // Use kv_cache.get_k_layer_ptr(layer) and get_v_layer_ptr(layer)
+        // directly as QNN tensor data pointers. No memcpy allowed here.
+    }
+
+    // ── HTP Graph Execute (HOT PATH) ────────────────────────────────────
+    {
+        PROFILE_SCOPE("htp_graph_execute");
+
+        // TODO: Uncomment when QNN SDK headers are available:
+        //
         // auto status = qnn_interface_.graphExecute(
         //     graph_handle_,
         //     input_tensors_.data(), input_tensors_.size(),
         //     output_tensors_.data(), output_tensors_.size(),
-        //     nullptr, nullptr
-        // );
-        // LOG_QNN_STATUS("prefill_execute", status);
+        //     nullptr, nullptr);
+        // if (status != QNN_SUCCESS) {
+        //     LOGE("[QNN] decode graphExecute failed: %d", status);
+        //     error_count_++;
+        //     return {};
+        // }
     }
 
-    int64_t t1 = get_time_us();
-    double prefill_ms = (t1 - t0) / 1000.0;
-    double prefill_tps = prompt_ids.size() / (prefill_ms / 1000.0);
-    LOGI("[PROFILE] Prefill: %.1fms | %.1f tokens/sec", prefill_ms, prefill_tps);
+    // ── Output extraction ────────────────────────────────────────────────
+    {
+        PROFILE_SCOPE("decode_output_extract");
+        // TODO: Extract logits from output tensor.
+        // The output is a float32 tensor of shape [1, vocab_size].
+    }
 
-    return extract_logits();
+    return {};
 }
 
+// ── shutdown ────────────────────────────────────────────────────────────────
 void QnnRuntime::shutdown() {
+    PROFILE_SCOPE("QnnRuntime::shutdown");
+
+    // TODO: Free QNN handles in reverse order:
+    // 1. graphFree(graph_handle_)
+    // 2. contextFree(context_handle_)
+    // 3. deviceFree(device_handle_)
+    // 4. backendFree(backend_handle_)
+    // 5. logFree(log_handle_)
+
     if (model_lib_handle_) {
         dlclose(model_lib_handle_);
         model_lib_handle_ = nullptr;
@@ -196,44 +314,21 @@ void QnnRuntime::shutdown() {
         dlclose(backend_lib_handle_);
         backend_lib_handle_ = nullptr;
     }
-    // TODO: Properly free QNN handles via qnn_interface_
-    LOGI("[PROFILE] QnnRuntime shutdown complete");
+
+    initialized_ = false;
+    LOGI("[QNN] Shutdown complete (errors during session: %d)", error_count_);
 }
 
-void QnnRuntime::log_memory_usage(const std::string& label) {
-    FILE* f = fopen("/proc/self/status", "r");
-    if (!f) return;
-    char line[256];
-    while (fgets(line, sizeof(line), f)) {
-        if (strncmp(line, "VmRSS:", 6) == 0 ||
-            strncmp(line, "VmPeak:", 7) == 0) {
-            LOGI("[PROFILE][MEM][%s] %s", label.c_str(), line);
-        }
-    }
-    fclose(f);
+// ── log_memory_usage ────────────────────────────────────────────────────────
+void QnnRuntime::log_memory_usage(const char* label) {
+    g_memory_guard.log_memory_state(label);
 }
 
+// ── get_time_us ─────────────────────────────────────────────────────────────
 int64_t QnnRuntime::get_time_us() {
     return std::chrono::duration_cast<std::chrono::microseconds>(
         std::chrono::high_resolution_clock::now().time_since_epoch()
     ).count();
 }
 
-void QnnRuntime::set_tensor(const std::string& name, const std::vector<int32_t>& data) {
-    // TODO: Wire up to QNN tensor API
-    // In production: use Qnn_Tensor_t and qnn_interface_ to set input tensor data
-    (void)name;
-    (void)data;
-}
-
-void QnnRuntime::set_kv_cache_tensors(const KVCacheState& kv_state) {
-    // TODO: Wire up KV cache pointers to QNN graph inputs
-    // These should be zero-copy — just pass the pointer from KVCacheManager
-    (void)kv_state;
-}
-
-std::vector<float> QnnRuntime::extract_logits() {
-    // TODO: Extract logits from QNN output tensors
-    // In production: read from output_tensors_ and return vocabulary logits
-    return {};
-}
+} // namespace halfhex

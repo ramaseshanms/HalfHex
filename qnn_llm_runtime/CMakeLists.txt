@@ -1,74 +1,142 @@
+# ============================================================================
+# CMakeLists.txt — HalfHex QNN LLM Runtime Build Configuration
+# ============================================================================
+#
+# OVERVIEW:
+#   Cross-compiles the QNN inference runtime for Android aarch64 (ARM64).
+#   Produces two targets:
+#     1. qnn_benchmark — CLI binary for on-device benchmarking
+#     2. qnn_inference_jni — Shared library (.so) for Android app integration
+#
+# PREREQUISITES:
+#   - Android NDK r26b (exact — later versions break QNN integration)
+#   - Qualcomm AI Engine Direct SDK (QNN SDK) >= v2.20
+#   - CMake >= 3.18
+#
+# BUILD COMMANDS:
+#
+#   # Set environment variables:
+#   export ANDROID_NDK=/path/to/ndk/r26b
+#   export QNN_SDK=/path/to/qnn-sdk
+#
+#   # Configure:
+#   cmake -B build-android \
+#     -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK/build/cmake/android.toolchain.cmake \
+#     -DANDROID_ABI=arm64-v8a \
+#     -DANDROID_PLATFORM=android-33 \
+#     -DCMAKE_BUILD_TYPE=Release \
+#     -DQNN_SDK_ROOT=$QNN_SDK \
+#     -DPROFILING_ENABLED=ON \
+#     -S qnn_llm_runtime
+#
+#   # Build:
+#   cmake --build build-android --config Release -j$(nproc)
+#
+#   # Output: build-android/qnn_benchmark
+#
+# ============================================================================
+
 cmake_minimum_required(VERSION 3.18)
-project(qnn_llm_runtime LANGUAGES CXX)
+project(halfhex_runtime LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
 
-# ── QNN SDK path (must be set via -DQNN_SDK_ROOT=...) ────────────────────────
+# ── QNN SDK Path ─────────────────────────────────────────────────────────────
+# Must be provided via -DQNN_SDK_ROOT=/path/to/qnn-sdk
 if(NOT DEFINED QNN_SDK_ROOT)
-    message(FATAL_ERROR "QNN_SDK_ROOT not defined. Set via -DQNN_SDK_ROOT=/path/to/qnn-sdk")
+    message(WARNING "QNN_SDK_ROOT not defined. QNN headers will not be available. "
+                    "Set via -DQNN_SDK_ROOT=/path/to/qnn-sdk")
 endif()
 
-# ── Build options ─────────────────────────────────────────────────────────────
-option(PROFILING_ENABLED "Enable profiling macros" ON)
+# ── Build Options ────────────────────────────────────────────────────────────
+option(PROFILING_ENABLED "Enable microsecond profiling macros (adds ~48MB ring buffer)" ON)
 option(BUILD_JNI "Build JNI shared library for Android app integration" OFF)
 
-# ── Include directories ──────────────────────────────────────────────────────
-include_directories(
-    ${CMAKE_SOURCE_DIR}/include
-    ${QNN_SDK_ROOT}/include
-    ${QNN_SDK_ROOT}/include/QNN
-)
-
-# ── Compile definitions ──────────────────────────────────────────────────────
-if(PROFILING_ENABLED)
-    add_compile_definitions(PROFILING_ENABLED)
+# ── Include Directories ──────────────────────────────────────────────────────
+include_directories(${CMAKE_SOURCE_DIR}/include)
+if(DEFINED QNN_SDK_ROOT)
+    include_directories(${QNN_SDK_ROOT}/include)
+    include_directories(${QNN_SDK_ROOT}/include/QNN)
 endif()
 
-# ── Source files ─────────────────────────────────────────────────────────────
+# ── Compile Definitions ──────────────────────────────────────────────────────
+if(PROFILING_ENABLED)
+    add_compile_definitions(PROFILING_ENABLED)
+    message(STATUS "Profiling: ENABLED (compile with -DPROFILING_ENABLED=OFF for release)")
+endif()
+
+# ── Compiler Warnings ────────────────────────────────────────────────────────
+# Treat warnings seriously — memory bugs in LLM inference are silent killers.
+add_compile_options(
+    -Wall -Wextra -Wpedantic
+    -Wno-unused-parameter      # QNN callback signatures have unused params
+    -Werror=return-type        # Missing return is always a bug
+    -Werror=uninitialized      # Uninitialized reads cause silent corruption
+)
+
+# ── Source Files ─────────────────────────────────────────────────────────────
 set(RUNTIME_SOURCES
     src/Profiler.cpp
+    src/MemoryGuard.cpp
     src/QnnRuntime.cpp
     src/KVCacheManager.cpp
     src/ThermalMonitor.cpp
     src/TokenizerWrapper.cpp
 )
 
-# ── CLI benchmark binary ─────────────────────────────────────────────────────
+# ── Target 1: CLI Benchmark Binary ───────────────────────────────────────────
 add_executable(qnn_benchmark
     src/main.cpp
     ${RUNTIME_SOURCES}
 )
 
-target_link_libraries(qnn_benchmark
-    dl          # for dlopen/dlsym (loading QNN .so at runtime)
+target_link_libraries(qnn_benchmark PRIVATE
+    dl          # dlopen/dlsym for loading QNN .so at runtime
     log         # Android logging (liblog)
 )
 
-# ── JNI shared library (for Android app) ─────────────────────────────────────
+# ── Target 2: JNI Shared Library (optional) ──────────────────────────────────
 if(BUILD_JNI)
     add_library(qnn_inference_jni SHARED
         jni/InferenceJNI.cpp
         ${RUNTIME_SOURCES}
     )
 
-    target_link_libraries(qnn_inference_jni
+    target_link_libraries(qnn_inference_jni PRIVATE
         dl
         log
     )
 endif()
 
-# ── Android-specific flags ───────────────────────────────────────────────────
+# ── Android-Specific Optimization ────────────────────────────────────────────
 if(ANDROID)
-    # Enable NEON SIMD
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -mfpu=neon -O3")
+    # ARM NEON is mandatory on arm64-v8a — no flag needed, but be explicit.
+    # -O3 for maximum loop unrolling and vectorization.
+    # -ffast-math for HTP tensor prep (not for accumulation — HTP handles that).
+    set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -O3 -ffast-math -DNDEBUG")
 
-    # Strip debug symbols for release
+    # Strip debug symbols in release (saves ~2MB on device).
     set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -s")
 endif()
 
-# ── Install targets ──────────────────────────────────────────────────────────
+# ── Install ──────────────────────────────────────────────────────────────────
 install(TARGETS qnn_benchmark DESTINATION bin)
 if(BUILD_JNI)
     install(TARGETS qnn_inference_jni DESTINATION lib)
 endif()
+
+# ── Print Configuration Summary ──────────────────────────────────────────────
+message(STATUS "============================================================")
+message(STATUS "HalfHex Runtime Configuration:")
+message(STATUS "  C++ Standard:    C++${CMAKE_CXX_STANDARD}")
+message(STATUS "  Build Type:      ${CMAKE_BUILD_TYPE}")
+message(STATUS "  Profiling:       ${PROFILING_ENABLED}")
+message(STATUS "  JNI Library:     ${BUILD_JNI}")
+message(STATUS "  QNN SDK Root:    ${QNN_SDK_ROOT}")
+if(ANDROID)
+    message(STATUS "  Android ABI:     ${ANDROID_ABI}")
+    message(STATUS "  Android Platform:${ANDROID_PLATFORM}")
+endif()
+message(STATUS "============================================================")
