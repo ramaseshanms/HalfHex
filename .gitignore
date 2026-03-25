@@ -1,0 +1,53 @@
+# === Build artifacts ===
+build-android/
+build/
+*.o
+*.so
+*.a
+*.dylib
+
+# === Model weights (too large for git) ===
+models/qwen3-1.7b-hf/
+models/qwen3-1.7b-onnx/
+models/qwen3-1.7b-qnn/
+models/qwen3-1.7b-qnn-int4/
+*.gguf
+*.bin
+*.safetensors
+*.onnx
+*.dlc
+
+# === Calibration data (generated) ===
+calibration_data/*.npy
+
+# === Logs and profiling output ===
+logs/*.log
+logs/*.csv
+logs/*.png
+
+# === llama.cpp (cloned during baseline) ===
+llama.cpp/
+
+# === Python ===
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.venv/
+venv/
+env/
+
+# === IDE ===
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# === OS ===
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# === Claude local settings (personal overrides) ===
+.claude/settings.local.json

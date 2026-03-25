@@ -1,0 +1,18 @@
+date: YYYY-MM-DD HH:MM
+device_temp_at_start: XX°C
+device_temp_at_end: XX°C
+prompt_eval_time: XX ms (YY tokens)
+prompt_eval_rate: XX tokens/sec
+eval_time: XX ms (YY tokens)           ← THIS IS YOUR TARGET TO BEAT
+eval_rate: XX tokens/sec               ← THIS IS YOUR TARGET TO BEAT
+sustained_60s_rate: XX tokens/sec      ← measure separately with longer output
+
+--- Vulkan Baseline ---
+date: YYYY-MM-DD HH:MM
+device_temp_at_start: XX°C
+device_temp_at_end: XX°C
+prompt_eval_time: XX ms (YY tokens)
+prompt_eval_rate: XX tokens/sec
+eval_time: XX ms (YY tokens)
+eval_rate: XX tokens/sec
+sustained_60s_rate: XX tokens/sec

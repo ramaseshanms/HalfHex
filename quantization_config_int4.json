@@ -1,0 +1,8 @@
+{
+  "activation_encodings": {},
+  "param_encodings": {
+    "model.embed_tokens.weight": [{"bitwidth": 16, "dtype": "float"}],
+    "lm_head.weight":            [{"bitwidth": 16, "dtype": "float"}],
+    "model.norm.weight":         [{"bitwidth": 16, "dtype": "float"}]
+  }
+}
