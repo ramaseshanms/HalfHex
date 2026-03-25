@@ -121,6 +121,53 @@ if(ANDROID)
     set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -s")
 endif()
 
+# ── Target 3: Test Suite ─────────────────────────────────────────────────────
+option(BUILD_TESTS "Build unit tests, accuracy tests, and performance regression tests" ON)
+
+if(BUILD_TESTS)
+    # Test sources — each file contains auto-registering TEST() macros.
+    set(TEST_SOURCES
+        tests/test_main.cpp
+        tests/test_profiler.cpp
+        tests/test_memory_guard.cpp
+        tests/test_kv_cache.cpp
+        tests/test_thermal_monitor.cpp
+        tests/test_accuracy.cpp
+        tests/test_perf_regression.cpp
+    )
+
+    # Runtime sources needed by tests (no QnnRuntime or TokenizerWrapper —
+    # those depend on QNN SDK / SentencePiece which may not be available).
+    set(TESTABLE_SOURCES
+        src/Profiler.cpp
+        src/MemoryGuard.cpp
+        src/KVCacheManager.cpp
+        src/ThermalMonitor.cpp
+    )
+
+    add_executable(halfhex_tests ${TEST_SOURCES} ${TESTABLE_SOURCES})
+
+    target_include_directories(halfhex_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/include
+        ${CMAKE_SOURCE_DIR}/tests
+    )
+
+    # On Android, link log library. On host, no extra libs needed.
+    if(ANDROID)
+        target_link_libraries(halfhex_tests PRIVATE log)
+    endif()
+
+    # Always need pthreads for std::thread in tests
+    find_package(Threads REQUIRED)
+    target_link_libraries(halfhex_tests PRIVATE Threads::Threads)
+
+    # Enable CTest integration
+    enable_testing()
+    add_test(NAME halfhex_unit_tests COMMAND halfhex_tests)
+
+    message(STATUS "  Tests:           ON (halfhex_tests)")
+endif()
+
 # ── Install ──────────────────────────────────────────────────────────────────
 install(TARGETS qnn_benchmark DESTINATION bin)
 if(BUILD_JNI)

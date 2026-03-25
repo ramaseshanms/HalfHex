@@ -19,6 +19,7 @@
 #include "Profiler.h"
 
 #include <algorithm>
+#include <cinttypes>
 #include <cmath>
 #include <ctime>
 #include <numeric>
