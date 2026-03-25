@@ -52,7 +52,7 @@ desktop.ini
 # === Claude local settings (personal overrides) ===
 .claude/settings.local.json
 qnn_llm_runtime/build-test/
-qnn_llm_runtime/third_party/sentencepiece/lib/*.a
+qnn_llm_runtime/third_party/sentencepiece/lib/
 sentencepiece/
 prompts.zip
 llama.cpp/
