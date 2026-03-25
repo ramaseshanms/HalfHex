@@ -1,18 +1,121 @@
-date: YYYY-MM-DD HH:MM
-device_temp_at_start: XX°C
-device_temp_at_end: XX°C
-prompt_eval_time: XX ms (YY tokens)
-prompt_eval_rate: XX tokens/sec
-eval_time: XX ms (YY tokens)           ← THIS IS YOUR TARGET TO BEAT
-eval_rate: XX tokens/sec               ← THIS IS YOUR TARGET TO BEAT
-sustained_60s_rate: XX tokens/sec      ← measure separately with longer output
+================================================================================
+llama.cpp Baseline — Qwen3-1.7B-Q4_K_M on Nothing Phone 3a Pro
+================================================================================
 
---- Vulkan Baseline ---
-date: YYYY-MM-DD HH:MM
-device_temp_at_start: XX°C
-device_temp_at_end: XX°C
-prompt_eval_time: XX ms (YY tokens)
-prompt_eval_rate: XX tokens/sec
-eval_time: XX ms (YY tokens)
-eval_rate: XX tokens/sec
-sustained_60s_rate: XX tokens/sec
+Device:         Nothing Phone 3a Pro (A059P)
+SoC:            Snapdragon 7s Gen 3 (codename "volcano")
+CPU:            8 cores (4x little @1.8GHz + 4x big @2.4GHz)
+RAM:            12 GB (LPDDR5)
+Android:        15 (API 35)
+Runtime:        llama.cpp b8508 (commit 9f102a1), built with NDK r26b, OpenMP ON
+Model:          Qwen3-1.7B-Q4_K_M (1.19 GiB, 2.03B params)
+Quantization:   Q4_K_M (4-bit, mixed precision)
+Backend:        CPU (ARM NEON + OpenMP)
+
+================================================================================
+BENCHMARK 1: CPU Baseline (4 big-core threads, taskset 0xF0)
+================================================================================
+date: 2026-03-26 02:14
+device_temp_at_start: 35.1°C
+device_temp_at_end: 36.1°C
+mem_available_start: 5449 MB
+mem_available_end: 5801 MB
+
+prompt_eval_rate: 5.70 tokens/sec         (pp512, 4 threads, big cores only)
+eval_rate: 1.49 tokens/sec                (tg200, 4 threads, big cores only)
+sustained_rate: 1.45 tokens/sec           (tg512, 4 threads, big cores only)
+
+NOTE: taskset 240 (0xF0) pins to big cores only. This severely limits
+parallelism for decode (which is memory-bandwidth-bound, not compute-bound).
+
+================================================================================
+BENCHMARK 2: CPU Baseline (8 threads, all cores)
+================================================================================
+date: 2026-03-26 02:16
+device_temp_at_start: 36.0°C
+device_temp_at_end: 39.0°C
+mem_available_start: ~5800 MB
+mem_available_end: 5868 MB
+
+prompt_eval_rate: 25.29 tokens/sec        (pp512, 8 threads)
+eval_rate: 5.26 tokens/sec                (tg200, 8 threads)
+
+================================================================================
+BENCHMARK 3: Thread Sweep (finding optimal thread count)
+================================================================================
+date: 2026-03-26 02:20
+device_temp_at_start: 37.9°C
+device_temp_at_end: 42.4°C (peak during sustained run)
+battery_end: 31%
+
+--- Prompt Processing (pp512) ---
+  2 threads:  12.40 tokens/sec
+  4 threads:   5.70 tokens/sec  (big cores only, taskset 0xF0)
+  6 threads:  23.54 tokens/sec
+  8 threads:  25.29 tokens/sec  ← BEST for prefill
+
+--- Text Generation / Decode (tg200) ---
+  2 threads:   9.05 tokens/sec  ← BEST for decode
+  4 threads:   1.49 tokens/sec  (big cores only, taskset 0xF0)
+  6 threads:   3.74 tokens/sec
+  8 threads:   5.26 tokens/sec
+
+--- Sustained Decode (tg512) ---
+  4 threads:   1.45 tokens/sec  (big cores only, taskset 0xF0)
+  8 threads:   5.91 tokens/sec
+
+================================================================================
+KEY FINDINGS
+================================================================================
+
+1. OPTIMAL THREAD CONFIGURATION:
+   - Prefill (batched):  8 threads → 25.29 t/s
+   - Decode (sequential): 2 threads → 9.05 t/s
+   - Strategy: Switch thread count between prefill and decode phases
+
+2. THE NUMBERS TO BEAT:
+   - Prefill (time-to-first-token for 512 tokens): 25.29 t/s → ~20.2 seconds
+   - Decode (sustained generation): 9.05 t/s (best), 5.91 t/s (sustained 512 tokens @ 8t)
+   - Target for QNN HTP runtime: >15 t/s decode, >40 t/s prefill
+
+3. THERMAL BEHAVIOR:
+   - Cold start: 32-35°C
+   - After full benchmark suite: 42.4°C (peak)
+   - No throttling observed (max temp well under 55°C limit)
+   - All benchmarks ran at stock CPU governor settings (no performance mode)
+
+4. MEMORY USAGE:
+   - Model RSS: ~1.3 GB (measured via /proc/PID/status VmRSS)
+   - System memory remained above 5.8 GB throughout (well above 1 GB floor)
+
+5. WHY 4-THREAD BIG-CORE-ONLY IS SLOW:
+   - The 4-thread taskset 0xF0 result (1.49 t/s decode) is an artifact of
+     pinning to only big cores. The big cores are faster per-core but the
+     decode phase is memory-bandwidth-bound, not compute-bound. Using all
+     8 cores (including LITTLE cores) provides more memory bandwidth
+     parallelism, yielding 3.5x better decode throughput.
+
+   - The 2-thread result (9.05 t/s) is even better because OpenMP thread
+     synchronization overhead dominates at these small batch sizes.
+     2 threads minimizes sync cost while still utilizing enough bandwidth.
+
+================================================================================
+RAW DATA
+================================================================================
+Tool: llama-bench (from llama.cpp b8508, commit 9f102a1)
+Build: NDK r26b, CMake Release, OpenMP ON, NEON ON, Vulkan OFF, shared libs OFF
+Model path on device: /data/local/tmp/halfhex/models/Qwen3-1.7B-Q4_K_M.gguf
+Binary path on device: /data/local/tmp/halfhex/bin/llama-bench
+
+| model                     |   size  |  params | backend | threads |  test  |    t/s     |
+| ------------------------- | ------: | ------: | ------- | ------: | -----: | ---------: |
+| qwen3 1.7B Q4_K - Medium | 1.19GiB |  2.03 B | CPU     |       2 |  pp512 |      12.40 |
+| qwen3 1.7B Q4_K - Medium | 1.19GiB |  2.03 B | CPU     |       2 |  tg200 |       9.05 |
+| qwen3 1.7B Q4_K - Medium | 1.19GiB |  2.03 B | CPU     |       4 |  pp512 |       5.70 |
+| qwen3 1.7B Q4_K - Medium | 1.19GiB |  2.03 B | CPU     |       4 |  tg200 |       1.49 |
+| qwen3 1.7B Q4_K - Medium | 1.19GiB |  2.03 B | CPU     |       4 |  tg512 |       1.45 |
+| qwen3 1.7B Q4_K - Medium | 1.19GiB |  2.03 B | CPU     |       6 |  pp512 |      23.54 |
+| qwen3 1.7B Q4_K - Medium | 1.19GiB |  2.03 B | CPU     |       6 |  tg200 |       3.74 |
+| qwen3 1.7B Q4_K - Medium | 1.19GiB |  2.03 B | CPU     |       8 |  pp512 |      25.29 |
+| qwen3 1.7B Q4_K - Medium | 1.19GiB |  2.03 B | CPU     |       8 |  tg200 |       5.26 |
+| qwen3 1.7B Q4_K - Medium | 1.19GiB |  2.03 B | CPU     |       8 |  tg512 |       5.91 |
