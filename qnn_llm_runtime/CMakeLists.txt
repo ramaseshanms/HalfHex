@@ -53,6 +53,22 @@ endif()
 # ── Build Options ────────────────────────────────────────────────────────────
 option(PROFILING_ENABLED "Enable microsecond profiling macros (adds ~48MB ring buffer)" ON)
 option(BUILD_JNI "Build JNI shared library for Android app integration" OFF)
+option(SENTENCEPIECE_ENABLED "Link SentencePiece tokenizer library" OFF)
+
+# ── SentencePiece Integration ────────────────────────────────────────────────
+# Cross-compiled libsentencepiece.a lives in third_party/sentencepiece/
+if(SENTENCEPIECE_ENABLED)
+    set(SENTENCEPIECE_DIR ${CMAKE_SOURCE_DIR}/third_party/sentencepiece)
+    if(EXISTS "${SENTENCEPIECE_DIR}/lib/libsentencepiece.a")
+        add_compile_definitions(HALFHEX_HAS_SENTENCEPIECE)
+        include_directories(${SENTENCEPIECE_DIR}/include)
+        message(STATUS "SentencePiece: ENABLED (static library)")
+    else()
+        message(WARNING "SentencePiece: REQUESTED but libsentencepiece.a not found at "
+                        "${SENTENCEPIECE_DIR}/lib/ — building without tokenizer")
+        set(SENTENCEPIECE_ENABLED OFF)
+    endif()
+endif()
 
 # ── Include Directories ──────────────────────────────────────────────────────
 include_directories(${CMAKE_SOURCE_DIR}/include)
@@ -96,6 +112,10 @@ target_link_libraries(qnn_benchmark PRIVATE
     dl          # dlopen/dlsym for loading QNN .so at runtime
     log         # Android logging (liblog)
 )
+if(SENTENCEPIECE_ENABLED)
+    target_link_libraries(qnn_benchmark PRIVATE
+        ${SENTENCEPIECE_DIR}/lib/libsentencepiece.a)
+endif()
 
 # ── Target 2: JNI Shared Library (optional) ──────────────────────────────────
 if(BUILD_JNI)
